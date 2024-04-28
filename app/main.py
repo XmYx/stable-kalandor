@@ -2,7 +2,7 @@ import pygame
 import sys
 
 from pygame.locals import *
-from llm import TextGameEngine, InventoryEngine
+from llm import TextGameEngine, InventoryEngine, InventoryItem
 
 # Constants
 FPS = 30
@@ -109,55 +109,20 @@ def draw_bordered_box(surface, rect, color, border_width):
 
 
 # Inventory Item class
-class InventoryItem:
-    def __init__(self, name, description, image_path):
-        self.name = name
-        self.description = description
-        self.image_path = image_path
-        self.image = pygame.image.load(image_path)
-        self.slot_rect = None  # Add this to store the rectangle
 
 
-class Inventory:
-    def __init__(self, max_slots=6):
-        self.items = []
-        self.max_slots = max_slots
-        self.rows = 2
-        self.cols = 3
 
-    def add_item(self, item):
-        if len(self.items) < self.max_slots:
-            self.items.append(item)
+def draw_score(surface, score, position, color, font, area_width):
+    score_text = f"Score: {score}"
+    score_surface = font.render(score_text, True, color)
+    text_width = score_surface.get_width()
+    # Calculate new x position to center the score in the given area
+    new_x = position[0] + (area_width - text_width) // 2
+    score_rect = score_surface.get_rect(topright=(new_x, position[1]))
+    surface.blit(score_surface, score_rect)
 
-    def remove_item(self, name):
-        self.items = [item for item in self.items if item.name != name]
 
-    def draw_inventory(self, surface, start_pos, area_size):
-        slot_width = area_size[0] // self.cols
-        slot_height = area_size[1] // self.rows
-
-        for i in range(self.max_slots):
-            row = i // self.cols
-            col = i % self.cols
-            x = start_pos[0] + col * slot_width
-            y = start_pos[1] + row * slot_height
-            slot_rect = pygame.Rect(x, y, slot_width, slot_height)
-
-            if i < len(self.items):
-                item = self.items[i]
-                item_surface = pygame.transform.scale(item.image, (slot_width, slot_height))
-                surface.blit(item_surface, slot_rect.topleft)
-                item.slot_rect = slot_rect  # Update the item's rectangle each draw call
-            else:
-                pygame.draw.rect(surface, BG_COLOR, slot_rect)
-
-            pygame.draw.rect(surface, BORDER_COLOR, slot_rect, 1)  # Draw slot border
-
-    def get_item_at_pos(self, pos):
-        for item in self.items:
-            if item.slot_rect and item.slot_rect.collidepoint(pos):  # Check stored rectangle
-                return item.name, item.description, item.image_path
-        return None, None, None
+import pygame
 
 
 def draw_label(surface, name, description, font, position, max_width, image_path):
@@ -176,19 +141,17 @@ def draw_label(surface, name, description, font, position, max_width, image_path
         print(f"Failed to load image: {e}")
         return
 
-    # Render and position the name directly under the image
+    # Prepare text for name and description to calculate total height
     name_surface = font.render(name, True, TEXT_COLOR)
-    name_rect = name_surface.get_rect(centerx=WIDTH // 2, top=image_rect.bottom + 10)
-    surface.blit(name_surface, name_rect)
+    name_rect = name_surface.get_rect(centerx=WIDTH // 2, top=image_rect.bottom)
 
-    # Initialize word wrapping for the description
+    # Word wrapping calculation
     words = description.split(' ')
     space_width, line_height = font.size(' ')
     line_words = []
     line_width = 0
-
-    # Create lines by accumulating words until the line width exceeds max_width
     lines = []
+
     for word in words:
         word_surface = font.render(word, True, TEXT_COLOR)
         word_width, word_height = word_surface.get_size()
@@ -201,32 +164,40 @@ def draw_label(surface, name, description, font, position, max_width, image_path
             line_width += word_width + space_width
     lines.append((line_words, line_width))  # Append the last line
 
-    # Draw the description text under the name
+    # Calculate overall height of all text elements
+    total_text_height = len(lines) * line_height
+    total_card_height = HEIGHT - 25  # plus margins
+
+    # Calculate card position to ensure it is centered
+    card_rect = pygame.Rect((WIDTH - max_width) // 2, max(0, HEIGHT // 2 - total_card_height // 2), max_width,
+                            total_card_height)
+
+    # Draw black background
+    pygame.draw.rect(surface, (0, 0, 0), card_rect)  # Filling with black
+
+    # Blit the image and texts
+    surface.blit(image, image_rect)
+    surface.blit(name_surface, name_rect)
+
     text_top = name_rect.bottom + 10  # Start text below the name
     for line_words, line_width in lines:
         line_text = ' '.join(line_words)
         line_surface = font.render(line_text, True, TEXT_COLOR)
         line_rect = line_surface.get_rect(centerx=WIDTH // 2, top=text_top)
-        text_top += line_height
         surface.blit(line_surface, line_rect)
+        text_top += line_height
 
-    # Calculate overall card dimensions and position to ensure it is centered
-    card_height = image_rect.height + (text_top - image_rect.top)
-    card_top = max(0, HEIGHT // 2 - card_height // 2)
-    card_rect = pygame.Rect((WIDTH - max_width) // 2, card_top, max_width, card_height)
-
-    # Draw background and borders for the whole card
+    # Draw border around the card
     pygame.draw.rect(surface, BORDER_COLOR, card_rect, 1)  # Drawing border
-
-    # Blit the image within the card
-    surface.blit(image, image_rect)
-
 
 
 def main():
     global WIDTH, HEIGHT, screen
     game_engine = TextGameEngine()
-    inventory_engine = InventoryEngine(game_engine.pipe, game_engine.image_pipe)
+    inventory_engine = InventoryEngine(game_engine.api_comms, 6)
+    # inventory = Inventory(6)
+    game_engine.inventory_engine = inventory_engine
+    # inventory_engine.inventory = inventory
     start_items = inventory_engine.get_start_items()
 
     font_size = HEIGHT // 30
@@ -237,7 +208,8 @@ def main():
     # Adjust the width and position calculations
     text_area_width = int(WIDTH * 0.68)
     image_area_width = WIDTH - text_area_width - 20
-
+    score_position = (text_area_width + 10, 10)  # Starting x position of the image area, y position remains at the top
+    score = 0
     image_position = (text_area_width + 10, 20)
     image_size = (image_area_width - 20, HEIGHT - 240)
     inventory_area_size = (image_area_width - 20, 200)
@@ -247,28 +219,26 @@ def main():
     running = True
     text_buffer = []
     image_path = None  # Path to the current image
-    system_response, image = game_engine.generate_response()
-    if image is not None:
-        image.save('current.png', "PNG")
-        image_path = 'current.png'
+    #system_response, image_path, _ = game_engine.generate_response()
+    if image_path is not None:
+        # image.save('current.png', "PNG")
+        # image_path = 'current.png'
         show_image(screen, image_path, image_position, image_size)
     update_text_buffer(text_buffer, "> " + input_text, 8)
-    update_text_buffer(text_buffer, system_response, 8)
+    #update_text_buffer(text_buffer, system_response, 8)
 
-    inventory = Inventory(6)
 
 
     # Add example inventory items for testing
     # inventory.add_item(InventoryItem("Example 1", "myapp.png"))
     # inventory.add_item(InventoryItem("Example 2", "myapp.png"))
     for item in start_items:
-        inventory.add_item(InventoryItem(item['name'], item['description'], item['image']))
+        inventory_engine.add_item(InventoryItem(item['name'], item['description'], item['image']))
     while running:
-
         mouse_pos = pygame.mouse.get_pos()
         screen.fill(BG_COLOR)
-        inventory.draw_inventory(screen, inventory_position, inventory_area_size)
-        hovered_item_name, hovered_item_description, hovered_item_image = inventory.get_item_at_pos(mouse_pos)
+        inventory_engine.draw_inventory(screen, inventory_position, inventory_area_size)
+        hovered_item_name, hovered_item_description, hovered_item_image = inventory_engine.get_item_at_pos(mouse_pos)
 
         for event in pygame.event.get():
             if event.type == QUIT:
@@ -282,6 +252,8 @@ def main():
                 image_area_width = WIDTH - text_area_width - 20
 
                 image_position = (text_area_width + 10, 20)
+                score_position = (text_area_width + 10, 10)  # Starting x position of the image area, y position remains at the top
+
                 image_size = (image_area_width - 20, HEIGHT - 240)
                 inventory_area_size = (image_area_width - 20, 200)
                 inventory_position = (image_position[0], HEIGHT - inventory_area_size[1] - 20)
@@ -289,11 +261,13 @@ def main():
             elif event.type == KEYDOWN:
                 if event.key == K_RETURN:
                     game_engine.add_user_message(input_text)
-                    system_response, image = game_engine.generate_response()
-                    if image is not None:
-                        image.save('current.png', "PNG")
-                        image_path = 'current.png'
+                    system_response, image_path, new_score = game_engine.generate_response()
+                    if image_path is not None:
+                        # image.save('current.png', "PNG")
+                        # image_path = 'current.png'
                         show_image(screen, image_path, image_position, image_size)
+                    if new_score is not None:
+                        score += new_score
                     update_text_buffer(text_buffer, "> " + input_text, 8)
                     update_text_buffer(text_buffer, system_response, 8)
                     input_text = ''
@@ -308,8 +282,8 @@ def main():
                     input_text += event.unicode
 
 
-        if hovered_item_name:
-            draw_label(screen, hovered_item_name, hovered_item_description, font, mouse_pos, WIDTH / 3, hovered_item_image)  # Display name at mouse position
+
+        draw_score(screen, score, score_position, TEXT_COLOR, font, image_area_width)
 
         y_offset = 20  # Top margin adjusted
         for text in text_buffer[-5:]:
@@ -323,7 +297,8 @@ def main():
         # Adjust border dimensions to fit within the window properly
         draw_bordered_box(screen, (10, 10, text_area_width, HEIGHT - 20), BORDER_COLOR, BORDER_WIDTH)
         draw_bordered_box(screen, (text_area_width + 10, 10, image_area_width - 20, HEIGHT - 20), BORDER_COLOR, BORDER_WIDTH)
-
+        if hovered_item_name:
+            draw_label(screen, hovered_item_name, hovered_item_description, font, mouse_pos, WIDTH / 3, hovered_item_image)  # Display name at mouse position
 
         pygame.display.flip()
         clock.tick(FPS)
